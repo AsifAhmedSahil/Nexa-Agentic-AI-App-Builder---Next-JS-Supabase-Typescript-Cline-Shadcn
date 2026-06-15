@@ -1,10 +1,11 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
-import { db } from "./prisma";
 import { PLANS } from "./constants";
-import type { Plan } from "@/types/plans";
+import { Plan } from "@/types/plans";
+import { db } from "../lib/prisma";
+
 
 const getCurrentPlan = async (): Promise<Plan> => {
-  const { has } = await auth();
+  const { has } = await auth();  
   if (has({ plan: "pro" })) return "pro";
   if (has({ plan: "starter" })) return "starter";
   return "free";
