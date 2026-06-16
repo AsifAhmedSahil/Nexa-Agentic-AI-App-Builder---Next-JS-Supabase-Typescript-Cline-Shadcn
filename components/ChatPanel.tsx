@@ -16,14 +16,14 @@ import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { PricingModal } from "@/components/PricingModal";
 import type { Message, StatusStep } from "@/types/workspace";
-// import { createClient } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 import { BlueTitle } from "./reusables";
 import Image from "next/image";
 
-// const supabase = createClient(
-//   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-//   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-// );
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 interface ChatPanelProps {
   messages: Message[];
@@ -110,23 +110,33 @@ export function ChatPanel({
     const file = e.target.files?.[0];
     if (!file || !file.type.startsWith("image/")) return;
     setIsUploading(true);
-    try {
-      const ext = file.name.split(".").pop();
-      const path = `${userId}/${workspaceId ?? "new"}/${Date.now()}.${ext}`;
-    //   const { error } = await supabase.storage
-    //     .from("workspace-images")
-    //     .upload(path, file, { upsert: true });
-    //   if (error) throw error;
-    //   const { data } = supabase.storage
-    //     .from("workspace-images")
-    //     .getPublicUrl(path);
-    //   setPendingImageUrl(data.publicUrl);
-    } catch {
-      // silent
-    } finally {
-      setIsUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
+   try {
+  const ext = file.name.split(".").pop();
+  const path = `${userId}/${workspaceId ?? "new"}/${Date.now()}.${ext}`;
+
+  console.log("PATH:", path);
+
+  const { data: uploadData, error } = await supabase.storage
+    .from("workspace-bucket")
+    .upload(path, file, { upsert: true });
+
+  console.log("UPLOAD DATA:", uploadData);
+
+  if (error) {
+    console.error("UPLOAD ERROR:", error);
+    return;
+  }
+
+  const { data } = supabase.storage
+    .from("workspace-bucket")
+    .getPublicUrl(path);
+
+  console.log("PUBLIC URL:", data.publicUrl);
+
+  setPendingImageUrl(data.publicUrl);
+} catch (err) {
+  console.error("IMAGE ERROR:", err);
+}
   };
 
   const canSubmit =
