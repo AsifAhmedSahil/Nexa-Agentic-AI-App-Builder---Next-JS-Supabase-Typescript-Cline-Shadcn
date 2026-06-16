@@ -1,16 +1,12 @@
-import { CREDIT_COST_PER_GENERATION } from "@/lib/constants";
-import { db } from "@/lib/prisma";
-import { FileData, Message } from "@/types/workspace";
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest } from "next/server";
 import { GoogleGenAI } from "@google/genai";
+import { db } from "@/lib/prisma";
+import { CREDIT_COST_PER_GENERATION } from "@/lib/constants";
+import type { Message, FileData } from "@/types/workspace";
+
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-
-function trimHistory(messages: Message[]): Message[] {
-  if (messages.length <= 10) return messages;
-  return [messages[0], ...messages.slice(-8)];
-}
 
 // ─── SSE helper ───────────────────────────────────────────────────────────────
 
@@ -55,6 +51,13 @@ async function validateDependencies(
   return valid;
 }
 
+// ─── History trimming ─────────────────────────────────────────────────────────
+
+function trimHistory(messages: Message[]): Message[] {
+  if (messages.length <= 10) return messages;
+  return [messages[0], ...messages.slice(-8)];
+}
+
 // ─── System prompt ────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are an expert React developer. Your job is to generate complete, working React applications based on user prompts.
@@ -82,20 +85,21 @@ RULES:
 9. Keep code clean, readable, and production-quality.
 10. If the user attaches an image, use it as a design reference and match the layout/style as closely as possible.`;
 
-
+// ─── Gemini contents builder ──────────────────────────────────────────────────
 
 function buildContents(messages: Message[], fileData: FileData | null) {
   const trimmed = trimHistory(messages);
 
   return trimmed.map((msg, idx) => {
     const role = msg.role === "assistant" ? "model" : "user";
+
     if (msg.role === "user") {
       const parts: object[] = [];
 
       let text = msg.content;
 
       if (msg.imageUrl) {
-        text = `[The user has attached an image. Use this URL directly in the generated app where relevant (as img src,background-image, etc.): ${msg.imageUrl}]\n\n${text}`;
+        text = `[The user has attached an image. Use this URL directly in the generated app where relevant (as img src, background-image, etc.): ${msg.imageUrl}]\n\n${text}`;
       }
 
       const isLast = idx === trimmed.length - 1;
@@ -104,6 +108,7 @@ function buildContents(messages: Message[], fileData: FileData | null) {
           "\n\nCurrent project files for context:\n" +
           JSON.stringify(fileData, null, 2);
       }
+
       parts.push({ text });
       return { role, parts };
     }
@@ -112,9 +117,10 @@ function buildContents(messages: Message[], fileData: FileData | null) {
   });
 }
 
+// ─── Route ────────────────────────────────────────────────────────────────────
+
 export async function POST(request: NextRequest) {
   const { userId: clerkId } = await auth();
-
   if (!clerkId) {
     return Response.json({ message: "Unauthorized" }, { status: 401 });
   }
@@ -128,10 +134,32 @@ export async function POST(request: NextRequest) {
   };
 
   if (!messages?.length) {
-    return Response.json({ messages: "No messages provided" }, { status: 400 });
+    return Response.json({ message: "No messages provided" }, { status: 400 });
   }
 
-  // -- Arcjet: rate limit, prompt injection, sensetive info ---
+  // ── Arcjet: rate limit, prompt injection, sensitive info ──────────────────
+  // detectPromptInjectionMessage requires the actual user text to inspect.
+
+  // const arcjetReq = new Request(request.url, {
+  //   method: request.method,
+  //   headers: request.headers,
+  //   body: JSON.stringify(body),
+  // });
+
+  // const lastUserMessage =
+  //   [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  // const decision = await aj.protect(arcjetReq, {
+  //   requested: 1,
+  //   userId: clerkId,
+  //   detectPromptInjectionMessage: lastUserMessage,
+  // });
+
+  // if (decision.isDenied()) {
+  //   return Response.json(
+  //     { message: decision.reason?.type ?? "Request blocked" },
+  //     { status: 429 }
+  //   );
+  // }
 
   const user = await db.user.findUnique({
     where: { id: userId, clerkId },
@@ -140,7 +168,6 @@ export async function POST(request: NextRequest) {
 
   if (!user)
     return Response.json({ message: "User not found" }, { status: 404 });
-
   if (user.credits < CREDIT_COST_PER_GENERATION) {
     return Response.json({ message: "Insufficient credits" }, { status: 402 });
   }
@@ -171,7 +198,7 @@ export async function POST(request: NextRequest) {
         let accumulated = ""; // final JSON output
         let lastEmitTime = 0; // throttle thought emissions
 
-            for await (const chunk of geminiStream) {
+        for await (const chunk of geminiStream) {
           const parts = chunk.candidates?.[0]?.content?.parts ?? [];
 
           for (const part of parts) {
@@ -215,7 +242,7 @@ export async function POST(request: NextRequest) {
           return;
         }
 
-         const {
+        const {
           assistantMessage,
           title: aiTitle,
           files,
@@ -242,7 +269,7 @@ export async function POST(request: NextRequest) {
           title: aiTitle,
         };
 
-         // ── Upsert workspace + deduct credit (single transaction) ──────────────
+        // ── Upsert workspace + deduct credit (single transaction) ──────────────
 
         enqueue(sseEvent("status", { message: "Saving…" }));
 
@@ -275,14 +302,12 @@ export async function POST(request: NextRequest) {
           }),
         ]);
 
-        // refetch the updated credit balance to return accurate value to the client
         const updatedUser = await db.user.findUnique({
           where: { id: userId },
           select: { credits: true },
         });
 
-
-         // ── Emit final result ──────────────────────────────────────────────────
+        // ── Emit final result ──────────────────────────────────────────────────
 
         enqueue(
           sseEvent("done", {
@@ -293,7 +318,6 @@ export async function POST(request: NextRequest) {
               updatedUser?.credits ?? user.credits - CREDIT_COST_PER_GENERATION,
           })
         );
-
       } catch (err) {
         console.error("[gen-ai-code] stream error:", err);
         enqueue(
@@ -307,15 +331,13 @@ export async function POST(request: NextRequest) {
     },
   });
 
-   return new Response(stream, {
+  return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     },
   });
-
-
 }
 
 export const runtime = "nodejs";
