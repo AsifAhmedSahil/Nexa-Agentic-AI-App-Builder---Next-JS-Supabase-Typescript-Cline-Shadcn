@@ -253,7 +253,7 @@ export function WorkspaceClient({
 
         if (res.status === 403) {
           toast.error(
-            "Upgrade to Starter or Pro to use Improve with Forge Agent."
+            "Upgrade to Starter or Pro to use Improve with Nexa Agent."
           );
           setMessages((prev) => prev.slice(0, -2));
           return;
